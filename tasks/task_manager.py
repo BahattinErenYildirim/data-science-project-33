@@ -8,6 +8,22 @@ Her fonksiyonun pass kısmını doldur. Testleri çalıştır, hepsi geçene kad
 iterate et: `python watch.py` veya `pytest tests/test_question.py -v`
 """
 
+import os
+import ssl
+import urllib.request
+import zipfile
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (
+    accuracy_score, precision_score, recall_score, f1_score,
+    confusion_matrix, roc_curve, roc_auc_score,
+    precision_recall_curve, average_precision_score,
+)
+
 
 # 1. UCI Bank Marketing veri setini indir (cache'li)
 def fetch_bank_data(cache_dir='data'):
@@ -35,7 +51,37 @@ def fetch_bank_data(cache_dir='data'):
     İpucu: import os, urllib.request, zipfile
     URL: https://archive.ics.uci.edu/static/public/222/bank+marketing.zip
     """
-    pass
+    os.makedirs(cache_dir, exist_ok=True)
+    csv_path = os.path.join(cache_dir, 'bank-additional', 'bank-additional-full.csv')
+
+    if os.path.exists(csv_path):
+        return csv_path
+
+    # İndir (SSL sertifikası süresi dolmuş olabilir — fallback ile)
+    url = 'https://archive.ics.uci.edu/static/public/222/bank+marketing.zip'
+    outer_zip_path = os.path.join(cache_dir, 'bank+marketing.zip')
+    try:
+        urllib.request.urlretrieve(url, outer_zip_path)
+    except urllib.error.URLError:
+        # SSL sertifika hatası — doğrulamayı atla
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
+        with opener.open(url) as response:
+            with open(outer_zip_path, 'wb') as f:
+                f.write(response.read())
+
+    # Dış zip'i aç
+    with zipfile.ZipFile(outer_zip_path, 'r') as zf:
+        zf.extractall(cache_dir)
+
+    # Nested zip'i aç
+    inner_zip_path = os.path.join(cache_dir, 'bank-additional.zip')
+    with zipfile.ZipFile(inner_zip_path, 'r') as zf:
+        zf.extractall(cache_dir)
+
+    return csv_path
 
 
 # 2. CSV'yi DataFrame olarak yükle
@@ -49,7 +95,7 @@ def load_bank_data(path):
     Returns:
         pd.DataFrame: 41188 satır × 21 sütun
     """
-    pass
+    return pd.read_csv(path, sep=';')
 
 
 # 3. Veriyi keşfet — class dağılımı, feature tipleri
@@ -72,7 +118,27 @@ def explore_data(df):
     - df.select_dtypes(include='number').columns.tolist() → numerik
     - 'y' her iki listeden çıkartılmalı
     """
-    pass
+    class_dist = df['y'].value_counts()
+    class_distribution = {str(k): int(v) for k, v in class_dist.items()}
+
+    positive_count = class_distribution.get('yes', 0)
+    positive_rate = positive_count / len(df)
+
+    categorical_cols = df.select_dtypes(include='object').columns.tolist()
+    if 'y' in categorical_cols:
+        categorical_cols.remove('y')
+
+    numeric_cols = df.select_dtypes(include='number').columns.tolist()
+    if 'y' in numeric_cols:
+        numeric_cols.remove('y')
+
+    return {
+        'shape': df.shape,
+        'class_distribution': class_distribution,
+        'positive_rate': positive_rate,
+        'categorical_cols': categorical_cols,
+        'numeric_cols': numeric_cols,
+    }
 
 
 # 4. Target leakage'lı feature'ları sil
@@ -89,7 +155,7 @@ def drop_leakage_features(df):
 
     İpucu: df.drop(columns=['duration']) — orijinali mutate etme
     """
-    pass
+    return df.drop(columns=['duration'])
 
 
 # 5. Target'ı encode et (yes/no → 1/0)
@@ -105,7 +171,9 @@ def encode_target(df):
 
     İpucu: df = df.copy(); df['y'] = df['y'].map({'yes': 1, 'no': 0})
     """
-    pass
+    df = df.copy()
+    df['y'] = df['y'].map({'yes': 1, 'no': 0})
+    return df
 
 
 # 6. Feature'ları hazırla (one-hot encoding)
@@ -128,7 +196,10 @@ def prepare_features(df):
     - X = pd.get_dummies(features, drop_first=True)
       (drop_first multicollinearity önler)
     """
-    pass
+    y = df['y']
+    features = df.drop(columns=['y'])
+    X = pd.get_dummies(features, drop_first=True)
+    return X, y
 
 
 # 7. Train/test split (stratified)
@@ -142,7 +213,7 @@ def split_data(X, y):
     Returns:
         tuple: (X_train, X_test, y_train, y_test)
     """
-    pass
+    return train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
 
 
 # 8. Balanced pipeline kur
@@ -159,7 +230,10 @@ def build_balanced_pipeline():
     Returns:
         sklearn.pipeline.Pipeline
     """
-    pass
+    return Pipeline([
+        ('scaler', StandardScaler()),
+        ('lr', LogisticRegression(max_iter=2000, class_weight='balanced', random_state=42)),
+    ])
 
 
 # 9. Modeli eğit
@@ -170,7 +244,8 @@ def train_model(pipeline, X_train, y_train):
     Returns:
         Pipeline: fit edilmiş pipeline
     """
-    pass
+    pipeline.fit(X_train, y_train)
+    return pipeline
 
 
 # 10. ROC metriklerini hesapla
@@ -191,7 +266,15 @@ def compute_roc_metrics(pipeline, X_test, y_test):
     - fpr, tpr, thresholds = roc_curve(y_test, y_proba)
     - auc = roc_auc_score(y_test, y_proba)
     """
-    pass
+    y_proba = pipeline.predict_proba(X_test)[:, 1]
+    fpr, tpr, thresholds = roc_curve(y_test, y_proba)
+    auc = roc_auc_score(y_test, y_proba)
+    return {
+        'fpr': fpr,
+        'tpr': tpr,
+        'thresholds': thresholds,
+        'auc': float(auc),
+    }
 
 
 # 11. PR (Precision-Recall) metriklerini hesapla
@@ -216,7 +299,16 @@ def compute_pr_metrics(pipeline, X_test, y_test):
     - precision, recall, thresholds = precision_recall_curve(y_test, y_proba)
     - ap = average_precision_score(y_test, y_proba)
     """
-    pass
+    y_proba = pipeline.predict_proba(X_test)[:, 1]
+    precision, recall, thresholds = precision_recall_curve(y_test, y_proba)
+    ap = average_precision_score(y_test, y_proba)
+    return {
+        'precision': precision,
+        'recall': recall,
+        'thresholds': thresholds,
+        'average_precision': float(ap),
+        'baseline': float(y_test.mean()),
+    }
 
 
 # 12. F1'i maksimize eden threshold'u bul
@@ -240,7 +332,22 @@ def find_best_threshold_f1(pipeline, X_test, y_test):
     - f1 = 2 * p * r / (p + r + 1e-12)  # epsilon: 0'a bölme koruması
     - np.argmax(f1) → en iyi index
     """
-    pass
+    y_proba = pipeline.predict_proba(X_test)[:, 1]
+    precision, recall, thresholds = precision_recall_curve(y_test, y_proba)
+
+    # Son elemanı atla (thresholds'tan 1 kısa)
+    p = precision[:-1]
+    r = recall[:-1]
+
+    f1 = 2 * p * r / (p + r + 1e-12)
+    best_idx = np.argmax(f1)
+
+    return {
+        'best_threshold': float(thresholds[best_idx]),
+        'best_f1': float(f1[best_idx]),
+        'precision_at_best': float(p[best_idx]),
+        'recall_at_best': float(r[best_idx]),
+    }
 
 
 # 13. Belirli threshold'da modeli değerlendir
@@ -266,7 +373,15 @@ def evaluate_at_threshold(pipeline, X_test, y_test, threshold):
     - sklearn.metrics'ten: accuracy_score, precision_score, recall_score,
       f1_score, confusion_matrix
     """
-    pass
+    y_proba = pipeline.predict_proba(X_test)[:, 1]
+    y_pred = (y_proba >= threshold).astype(int)
+    return {
+        'accuracy': float(accuracy_score(y_test, y_pred)),
+        'precision': float(precision_score(y_test, y_pred)),
+        'recall': float(recall_score(y_test, y_pred)),
+        'f1': float(f1_score(y_test, y_pred)),
+        'confusion_matrix': confusion_matrix(y_test, y_pred),
+    }
 
 
 # 14. Tek bir müşteri için tahmin yap
@@ -290,7 +405,13 @@ def predict_customer(pipeline, customer_features, threshold=0.5):
     - proba = pipeline.predict_proba(customer_features)[0, 1]
     - predicted = int(proba >= threshold)
     """
-    pass
+    proba = float(pipeline.predict_proba(customer_features)[0, 1])
+    predicted = int(proba >= threshold)
+    return {
+        'predicted': predicted,
+        'probability': proba,
+        'will_subscribe': bool(predicted == 1),
+    }
 
 
 # 15. Balanced vs Unbalanced karşılaştırması
@@ -314,7 +435,26 @@ def compare_with_without_balance(X_train, X_test, y_train, y_test):
 
     İpucu: İki ayrı pipeline kur, fit et, metrikleri hesapla.
     """
-    pass
+    results = {}
+
+    for label, weight in [('balanced', 'balanced'), ('unbalanced', None)]:
+        pipe = Pipeline([
+            ('scaler', StandardScaler()),
+            ('lr', LogisticRegression(max_iter=2000, class_weight=weight, random_state=42)),
+        ])
+        pipe.fit(X_train, y_train)
+
+        y_pred = pipe.predict(X_test)
+        y_proba = pipe.predict_proba(X_test)[:, 1]
+
+        results[label] = {
+            'recall': float(recall_score(y_test, y_pred)),
+            'precision': float(precision_score(y_test, y_pred)),
+            'f1': float(f1_score(y_test, y_pred)),
+            'auc': float(roc_auc_score(y_test, y_proba)),
+        }
+
+    return results
 
 
 # 16. Tüm pipeline'ı uçtan uca çalıştır
@@ -339,7 +479,42 @@ def run_pipeline():
                 (balanced.recall - unbalanced.recall, pozitif olmalı)
         }
     """
-    pass
+    # 1. Veri çek + yükle
+    csv_path = fetch_bank_data()
+    df = load_bank_data(csv_path)
+
+    # 2. Preprocessing
+    df = drop_leakage_features(df)
+    df = encode_target(df)
+    X, y = prepare_features(df)
+
+    # Positive rate
+    positive_rate = float(y.mean())
+
+    # 3. Split
+    X_train, X_test, y_train, y_test = split_data(X, y)
+
+    # 4. Pipeline kur + eğit
+    pipe = build_balanced_pipeline()
+    pipe = train_model(pipe, X_train, y_train)
+
+    # 5. Metrikler
+    roc = compute_roc_metrics(pipe, X_test, y_test)
+    pr = compute_pr_metrics(pipe, X_test, y_test)
+    best_f1_result = find_best_threshold_f1(pipe, X_test, y_test)
+
+    # 6. Balanced vs unbalanced karşılaştırma
+    cmp = compare_with_without_balance(X_train, X_test, y_train, y_test)
+    recall_diff = cmp['balanced']['recall'] - cmp['unbalanced']['recall']
+
+    return {
+        'positive_rate': positive_rate,
+        'auc': roc['auc'],
+        'average_precision': pr['average_precision'],
+        'best_threshold_f1': best_f1_result['best_threshold'],
+        'best_f1': best_f1_result['best_f1'],
+        'balanced_vs_unbalanced_recall_diff': recall_diff,
+    }
 
 
 if __name__ == "__main__":
